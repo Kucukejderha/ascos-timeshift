@@ -6,9 +6,6 @@ __pycache__/
 *.wixpdb
 installer/*.log
 
-# Paketler
-*.msi
-
 # Gelistirme
 graphify-out/
 .vscode/
