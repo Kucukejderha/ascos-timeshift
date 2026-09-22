@@ -1,0 +1,27 @@
+ASCOS TimeShift - Üçüncü Taraf Bileşen Bildirimleri
+==================================================
+
+Bu ürün, aşağıdaki açık kaynak bileşenleri içerir. Her bileşenin lisansı
+kendi telif sahiplerine aittir.
+
+1) Frida (frida-core, frida-python)
+   Lisans: wxWindows Library Licence, Version 3.1
+   Telif: Copyright (c) 2009-2026 Ole André Vadla Ravnås and contributors
+   Kaynak: https://github.com/frida/frida
+
+2) CPython (Python 3.12 çalışma zamanı)
+   Lisans: Python Software Foundation License Version 2
+   Telif: Copyright (c) 2001-2026 Python Software Foundation
+   Kaynak: https://www.python.org
+
+3) Tcl/Tk (tkinter arayüzü için)
+   Lisans: Tcl/Tk License (BSD benzeri)
+   Kaynak: https://www.tcl.tk
+
+4) PyInstaller (paketleme; bootloader)
+   Lisans: GPL-2.0-or-later, bootloader istisnası ile
+   Telif: Copyright (c) 2010-2026 PyInstaller Development Team
+   Kaynak: https://pyinstaller.org
+
+Not: Paketlenmiş Python çalışma zamanı OpenSSL, zlib ve diğer bileşenleri de
+içerebilir; ilgili lisans metinleri Python dağıtımıyla birlikte sunulur.

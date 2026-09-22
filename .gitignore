@@ -1,0 +1,15 @@
+# Derleme ciktilari
+build/
+dist/
+__pycache__/
+*.pyc
+*.wixpdb
+installer/*.log
+
+# Paketler
+*.msi
+
+# Gelistirme
+graphify-out/
+.vscode/
+.idea/

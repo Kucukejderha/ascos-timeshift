@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs"
+     xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
+  <Package Name="ASCOS TimeShift"
+           Manufacturer="ASCOS"
+           Version="1.0.0"
+           ProductCode="{89B22754-4FBC-4356-983F-255A90ED0375}"
+           UpgradeCode="{86F6FF0B-2989-460B-A671-4429820AF470}"
+           Scope="perUser"
+           Language="1055"
+           Compressed="yes">
+
+    <MajorUpgrade DowngradeErrorMessage="ASCOS TimeShift'in daha yeni bir surumu zaten kurulu." />
+    <MediaTemplate EmbedCab="yes" />
+    <ui:WixUI Id="WixUI_Minimal" />
+    <WixVariable Id="WixUILicenseRtf" Value="license\MIT.rtf" />
+    <Icon Id="AppIcon.ico" SourceFile="..\assets\ASCOS-TimeShift.ico" />
+    <Property Id="ARPPRODUCTICON" Value="AppIcon.ico" />
+
+    <StandardDirectory Id="LocalAppDataFolder">
+      <Directory Id="ProgramsFolder" Name="Programs">
+        <Directory Id="INSTALLFOLDER" Name="ASCOS TimeShift" />
+      </Directory>
+    </StandardDirectory>
+
+    <StandardDirectory Id="ProgramMenuFolder">
+      <Directory Id="AppMenuFolder" Name="ASCOS TimeShift" />
+    </StandardDirectory>
+
+    <StandardDirectory Id="DesktopFolder" />
+
+    <ComponentGroup Id="AppFiles" Directory="INSTALLFOLDER">
+      <Component Id="ApplicationFiles" Guid="{4142A83C-969B-434E-A87B-91E211D7BE9C}">
+        <File Id="TimeShiftGuiExe" Source="..\dist\TimeShiftGui.exe" KeyPath="yes">
+          <Shortcut Id="StartMenuShortcut"
+                    Directory="AppMenuFolder"
+                    Name="TimeShift"
+                    Description="Sanal tarih/saat ile uygulama baslatici" />
+          <Shortcut Id="DesktopShortcut"
+                    Directory="DesktopFolder"
+                    Name="TimeShift"
+                    Description="Sanal tarih/saat ile uygulama baslatici" />
+        </File>
+        <File Id="TimeShiftCliExe" Source="..\dist\TimeShift.exe" />
+      </Component>
+      <Component Id="DocumentationFiles" Guid="{16C4E522-5602-4414-B0FF-456E16A2F495}">
+        <File Id="LicenseFile" Source="..\LICENSE" KeyPath="yes" />
+        <File Id="ThirdPartyNotices" Source="..\THIRD-PARTY-NOTICES.txt" />
+      </Component>
+    </ComponentGroup>
+  </Package>
+</Wix>
