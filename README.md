@@ -85,6 +85,18 @@ TimeShift.exe --date 2024-01-01 --time 09:00:00 "C:\...\uygulama.exe" --profil t
 
 Arayüzdeki **Argümanlar** sahası, hedef uygulamaya komut satırı argümanı iletir; başlatırken exe yolunun ardına eklenir. Boş bırakılırsa uygulama argümansız açılır. Tırnaklı ifadeler desteklenir (`"C:\yol\dosya adı.txt"`).
 
+## Tanılama ve Günlük Gönderimi
+
+Hedef uygulama beklendiği gibi çalışmazsa (çökme, sıfırdan farklı çıkış kodu veya çok hızlı kapanma) TimeShift ayrıntılı bir tanılama kaydı üretir:
+
+- **Yerel kayıt:** `%LOCALAPPDATA%\ASCOS TimeShift\logs\` (son 20 kayıt saklanır; arayüzdeki **Günlükler** bağlantısıyla açılır)
+- **Onaylı gönderim:** Hata sonrası açılan pencerede içerik önizlemesi gösterilir; **Sunucuya gönder** / **Dosyaya kaydet** / **Kapat** seçenekleri sunulur. Onay olmadan hiçbir veri gönderilmez.
+- **Anonimleştirme:** Kullanıcı adı ve profil yolu `%USER%` / `%USERPROFILE%` ile maskelenir (varsayılan açık)
+- **Toplananlar:** uygulama sürümü, işletim sistemi, hedef dosya bilgileri (mimari, sürüm, SHA256), çalıştırma parametreleri, çıkış kodu, Frida ayrılma nedeni, alt süreçler ve oturum günlüğü
+- **Sunucu:** `https://45.87.173.201.nip.io/ascos-logs` (ortak [ASCOS Logging](https://github.com/Kucukejderha/ascos-logging) altyapısı; 30 gün / 200 MB otomatik temizlik)
+- **Lokal takip:** `C:\projeler\ASCOS Logs\timeshift\` — indirilen kayıtlar ve `HATALAR-VE-COZUMLER.md`
+- **Araçlar:** `C:\projeler\ASCOS Logs\loglari-indir.ps1` ve `sunucu-loglari-temizle.ps1`
+
 ## Sınırlamalar
 
 - Sahte tarih, TLS sertifikalarının geçerlilik aralığı dışındaysa HTTPS bağlantıları başarısız olabilir.

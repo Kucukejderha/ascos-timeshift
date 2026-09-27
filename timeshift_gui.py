@@ -15,6 +15,11 @@ from tkinter import filedialog, messagebox, ttk
 
 import timeshift
 
+try:
+    import ascos_logging
+except Exception:
+    ascos_logging = None
+
 MIT_LICENSE_TEXT = """MIT License
 
 Copyright (c) 2026 ASCOS
@@ -63,6 +68,8 @@ FONT_BRAND = ("Segoe UI Semibold", 15)
 FONT_LINK = ("Segoe UI Semibold", 10)
 
 WEBSITE_URL = "https://rotaniz.com/ascos-araclar/"
+LOG_UPLOAD_URL = "https://45.87.173.201.nip.io/ascos-logs"
+LOG_API_KEY = "de5b93ed6277a6a86bb05ef3d0f11af2dfe96aa319c89a77"
 
 
 class TimeShiftGui:
@@ -74,6 +81,7 @@ class TimeShiftGui:
         self.root.minsize(860, 620)
         self.messages = queue.Queue()
         self.session = None
+        self.settings = self._init_settings()
         self._configure_styles()
         self._apply_window_icon()
         self._build_sidebar()
@@ -81,6 +89,17 @@ class TimeShiftGui:
         self._fill_now()
         self.root.protocol("WM_DELETE_WINDOW", self._on_close)
         self.root.after(100, self._drain_messages)
+
+    def _init_settings(self):
+        if ascos_logging is None:
+            return None
+        settings = ascos_logging.Settings(timeshift.CONFIG_DIR, defaults={
+            "upload_url": LOG_UPLOAD_URL,
+            "api_key": LOG_API_KEY,
+        })
+        if not os.path.isfile(settings.path):
+            settings.save()
+        return settings
 
     def _configure_styles(self):
         style = ttk.Style(self.root)
@@ -176,8 +195,12 @@ class TimeShiftGui:
         website.bind("<Button-1>", lambda event: self._open_website())
         about = tk.Label(bottom, text="Hakkında", fg=LINK_HOVER, bg=NAVY, font=FONT_SEMI,
                          anchor="w", cursor="hand2")
-        about.pack(fill="x", pady=(2, 12))
+        about.pack(fill="x", pady=(2, 0))
         about.bind("<Button-1>", lambda event: self._show_about())
+        logs_link = tk.Label(bottom, text="Günlükler", fg=LINK_HOVER, bg=NAVY, font=FONT_SEMI,
+                             anchor="w", cursor="hand2")
+        logs_link.pack(fill="x", pady=(2, 12))
+        logs_link.bind("<Button-1>", lambda event: self._open_logs_folder())
 
         status_row = tk.Frame(bottom, bg=NAVY)
         status_row.pack(fill="x")
@@ -285,16 +308,23 @@ class TimeShiftGui:
 
     def _set_status(self, text, kind="idle"):
         colors = {"idle": MUTED, "running": SUCCESS, "error": DANGER}
-        dot_colors = {"idle": MUTED, "running": SUCCESS, "error": DANGER}
         self.status_label.configure(text=text)
         self.workspace_status.configure(text=text, fg=colors.get(kind, MUTED))
-        self.status_dot.itemconfigure(self.status_dot_id, fill=dot_colors.get(kind, MUTED))
+        self.status_dot.itemconfigure(self.status_dot_id, fill=colors.get(kind, MUTED))
 
     def _open_website(self):
         try:
             webbrowser.open(WEBSITE_URL)
         except Exception as exc:
             messagebox.showwarning("ASCOS TimeShift", f"Web sitesi açılamadı.\n\n{exc}")
+
+    def _open_logs_folder(self):
+        logs_dir = os.path.join(timeshift.CONFIG_DIR, "logs")
+        try:
+            os.makedirs(logs_dir, exist_ok=True)
+            os.startfile(logs_dir)
+        except OSError as exc:
+            messagebox.showwarning("ASCOS TimeShift", f"Günlük klasörü açılamadı.\n\n{exc}")
 
     def _fill_now(self):
         now = dt.datetime.now()
@@ -419,6 +449,34 @@ class TimeShiftGui:
         worker.start()
 
     def _run(self, executable, target_args, when, freeze, ticks, early):
+        diag = None
+        if ascos_logging is not None:
+            try:
+                diag = ascos_logging.Diagnostics(
+                    app="timeshift",
+                    version=timeshift.VERSION,
+                    config_dir=timeshift.CONFIG_DIR,
+                    settings=self.settings,
+                )
+                diag.set_run_context(
+                    mode="erken" if early else "gec",
+                    freeze=bool(freeze),
+                    ticks=bool(ticks),
+                    when=when.strftime("%Y-%m-%d %H:%M:%S"),
+                )
+            except Exception:
+                diag = None
+
+        def report(message):
+            self.messages.put(("log", message))
+            if diag is not None:
+                diag.log(message)
+
+        def report_error(message):
+            self.messages.put(("log", "HATA: " + message))
+            if diag is not None:
+                diag.log("HATA: " + message)
+
         try:
             self.session = timeshift.launch(
                 executable,
@@ -427,23 +485,66 @@ class TimeShiftGui:
                 freeze=freeze,
                 ticks=ticks,
                 early_attach=early,
-                on_log=lambda message: self.messages.put(("log", message)),
-                on_error=lambda message: self.messages.put(("log", "HATA: " + message)),
+                on_log=report,
+                on_error=report_error,
             )
-            self.messages.put(("log", f"Hedef başlatıldı (pid {self.session.pid})."))
+            report(f"Hedef başlatıldı (pid {self.session.pid}).")
             self.messages.put(("status", ("Hedef çalışıyor (pid %d)" % self.session.pid, "running")))
+            if diag is not None:
+                try:
+                    info = timeshift.describe_target(executable)
+                    info["args"] = list(map(str, target_args))
+                    diag.set_target(**info)
+                except Exception:
+                    pass
             self.session.wait()
-            self.messages.put(("log", "Hedef kapandı."))
+            report("Hedef kapandı.")
+            if diag is not None:
+                diag.finish(
+                    exit_code=self.session.exit_code,
+                    detach_reason=self.session.detach_reason,
+                    crash=self.session.crash,
+                )
+                for pid, name in self.session.children.items():
+                    diag.add_child(pid, name)
+                if diag.is_failure():
+                    diag.set_event(
+                        "target-failed",
+                        self._failure_summary(diag),
+                        "error",
+                    )
+                    self.messages.put(("failure", diag))
             self.messages.put(("status", ("Hazır", "idle")))
         except timeshift.TimeShiftError as exc:
             self.messages.put(("log", "HATA: " + str(exc)))
             self.messages.put(("status", ("Hata", "error")))
+            if diag is not None:
+                diag.context["failedToLaunch"] = True
+                diag.finish()
+                diag.set_event("launch-error", str(exc), "error")
+                self.messages.put(("failure", diag))
         except Exception as exc:
             self.messages.put(("log", f"Beklenmeyen hata: {exc}"))
             self.messages.put(("status", ("Hata", "error")))
+            if diag is not None:
+                diag.context["failedToLaunch"] = True
+                diag.finish()
+                diag.set_event("launch-error", f"Beklenmeyen hata: {exc}", "error")
+                self.messages.put(("failure", diag))
         finally:
             self.session = None
             self.messages.put(("done", ""))
+
+    def _failure_summary(self, diag):
+        result = diag.result or {}
+        code = result.get("exitCodeHex") or ("0x%08X" % (result.get("exitCode") & 0xFFFFFFFF)
+                                             if result.get("exitCode") is not None else "bilinmiyor")
+        duration = result.get("durationMs") or 0
+        if result.get("detachReason") == "process-crashed" or result.get("crash"):
+            return f"Hedef çöktü ({code}), süre {duration} ms"
+        if duration and duration < 3000 and (result.get("exitCode") or 0) == 0:
+            return f"Hedef {duration} ms içinde kapandı (çıkış kodu {code})"
+        return f"Hedef hata ile kapandı (çıkış kodu {code}), süre {duration} ms"
 
     def _stop(self):
         session = self.session
@@ -471,9 +572,126 @@ class TimeShiftGui:
             elif kind == "status":
                 text, state = payload
                 self._set_status(text, state)
+            elif kind == "failure":
+                self._offer_diagnostics(payload)
+            elif kind == "diag-result":
+                self._append_log(payload)
+            elif kind == "diag-dialog":
+                widget_status, widget_button, text = payload
+                try:
+                    widget_status.configure(text=text[:120])
+                    widget_button.configure(state="normal")
+                except tk.TclError:
+                    pass
             elif kind == "done":
                 self._set_running(False)
         self.root.after(100, self._drain_messages)
+
+    def _offer_diagnostics(self, diag):
+        payload = diag.build_payload()
+        local_path = diag.save_local(payload)
+        summary = payload.get("summary") or "Hedef uygulama beklendiği gibi çalışmadı."
+
+        dialog = tk.Toplevel(self.root)
+        dialog.title("Tanılama Günlüğü")
+        dialog.configure(bg="white")
+        dialog.transient(self.root)
+        dialog.resizable(True, True)
+
+        header = tk.Frame(dialog, bg=NAVY)
+        header.pack(fill="x")
+        tk.Label(header, text="Hata tespit edildi", fg="white", bg=NAVY,
+                 font=("Segoe UI Semibold", 13)).pack(anchor="w", padx=16, pady=12)
+
+        body = tk.Frame(dialog, bg="white")
+        body.pack(fill="both", expand=True, padx=16, pady=12)
+        tk.Label(body, text=summary, fg=INK, bg="white", font=FONT_SEMI, anchor="w",
+                 wraplength=560, justify="left").pack(fill="x")
+
+        detail = []
+        target = payload.get("target", {})
+        if target.get("path"):
+            detail.append("Hedef: " + str(target["path"]))
+        result = payload.get("result", {})
+        if result.get("exitCodeHex"):
+            detail.append(f"Çıkış kodu: {result['exitCodeHex']}")
+        if result.get("durationMs") is not None:
+            detail.append(f"Süre: {result['durationMs']} ms")
+        if local_path:
+            detail.append("Yerel kayıt: " + local_path)
+        tk.Label(body, text="\n".join(detail), fg=MUTED, bg="white", font=FONT,
+                 anchor="w", justify="left", wraplength=560).pack(fill="x", pady=(6, 8))
+
+        anonymize_var = tk.BooleanVar(
+            value=bool(self.settings.anonymize) if self.settings else True)
+
+        preview_frame = tk.Frame(body, bg="white", highlightthickness=1,
+                                 highlightbackground=BORDER)
+        preview_frame.pack(fill="both", expand=True)
+        preview = tk.Text(preview_frame, width=78, height=16, wrap="none", bg="white",
+                          fg=INK, bd=0, highlightthickness=0, font=("Consolas", 8),
+                          padx=8, pady=6)
+        preview.pack(fill="both", expand=True)
+
+        def render_preview():
+            data = diag.build_payload(anonymize=anonymize_var.get())
+            preview.configure(state="normal")
+            preview.delete("1.0", "end")
+            preview.insert("1.0", ascos_logging.preview_text(data, limit=6000))
+            preview.configure(state="disabled")
+
+        render_preview()
+
+        options = tk.Frame(body, bg="white")
+        options.pack(fill="x", pady=(8, 0))
+        ttk.Checkbutton(options, text="Kişisel bilgileri anonimleştir", variable=anonymize_var,
+                        style="App.TCheckbutton", command=render_preview).pack(side="left")
+        status = tk.Label(options, text="", fg=MUTED, bg="white", font=FONT, anchor="e")
+        status.pack(side="right")
+
+        buttons = tk.Frame(body, bg="white")
+        buttons.pack(fill="x", pady=(10, 0))
+        send_button = ttk.Button(buttons, text="Sunucuya gönder", style="Primary.TButton")
+        send_button.pack(side="left")
+        save_button = ttk.Button(buttons, text="Dosyaya kaydet", style="Secondary.TButton")
+        save_button.pack(side="left", padx=(8, 0))
+        ttk.Button(buttons, text="Kapat", style="Secondary.TButton",
+                   command=dialog.destroy).pack(side="right")
+
+        def do_send():
+            send_button.configure(state="disabled")
+            status.configure(text="Gönderiliyor…")
+            anonymize = bool(anonymize_var.get())
+
+            def worker():
+                data = diag.build_payload(anonymize=anonymize)
+                ok, detail_text = diag.upload(data)
+                if ok:
+                    message = f"Tanılama günlüğü gönderildi ({detail_text})."
+                else:
+                    message = f"Gönderilemedi: {detail_text}"
+                self.messages.put(("diag-result", message))
+                self.messages.put(("diag-dialog", (status, send_button, message)))
+
+            threading.Thread(target=worker, daemon=True).start()
+
+        def do_save():
+            data = diag.build_payload(anonymize=anonymize_var.get())
+            path = diag.save_local(data)
+            if path:
+                message = "Kaydedildi: " + path
+                self.messages.put(("diag-result", message))
+                status.configure(text=message[:90])
+            else:
+                status.configure(text="Kaydedilemedi.")
+
+        send_button.configure(command=do_send)
+        save_button.configure(command=do_save)
+
+        try:
+            dialog.grab_set()
+        except tk.TclError:
+            pass
 
     def _on_close(self):
         if self.session is not None and self.session.is_running():

@@ -4,13 +4,18 @@
 from __future__ import annotations
 
 import argparse
+import ctypes
 import datetime as dt
+import hashlib
 import os
+import struct
 import sys
 import threading
 import time
+from ctypes import wintypes
 
 import frida
+
 
 def base_directory() -> str:
     if getattr(sys, "frozen", False):
@@ -20,7 +25,16 @@ def base_directory() -> str:
 
 AGENT_PATH = os.path.join(base_directory(), "agent.js")
 ASSETS_DIR = os.path.join(base_directory(), "assets")
-VERSION = "1.0.0"
+CONFIG_DIR = os.path.join(
+    os.environ.get("LOCALAPPDATA") or os.path.expanduser("~"), "ASCOS TimeShift")
+VERSION = "1.1.0"
+
+PROCESS_QUERY_LIMITED_INFORMATION = 0x1000
+TH32CS_SNAPPROCESS = 0x00000002
+INVALID_HANDLE_VALUE = ctypes.c_void_p(-1).value
+
+_kernel32 = ctypes.WinDLL("kernel32", use_last_error=True) if os.name == "nt" else None
+_version = ctypes.WinDLL("version", use_last_error=True) if os.name == "nt" else None
 
 
 class TimeShiftError(Exception):
@@ -45,16 +59,197 @@ def parse_datetime(date_text: str, time_text: str) -> dt.datetime:
     raise TimeShiftError("Tarih/saat formati gecersiz. Ornek: --date 2020-06-15 --time 12:30:00")
 
 
+def open_exit_handle(pid):
+    if _kernel32 is None:
+        return None
+    try:
+        handle = _kernel32.OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, False, int(pid))
+    except Exception:
+        return None
+    return handle or None
+
+
+def query_exit_code(handle):
+    if _kernel32 is None or not handle:
+        return None
+    code = wintypes.DWORD(0)
+    if _kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+        return int(code.value)
+    return None
+
+
+def close_handle(handle):
+    if _kernel32 is not None and handle:
+        try:
+            _kernel32.CloseHandle(handle)
+        except Exception:
+            pass
+
+
+class _ProcessEntry32W(ctypes.Structure):
+    _fields_ = [
+        ("dwSize", wintypes.DWORD),
+        ("cntUsage", wintypes.DWORD),
+        ("th32ProcessID", wintypes.DWORD),
+        ("th32DefaultHeapID", ctypes.POINTER(ctypes.c_ulong)),
+        ("th32ModuleID", wintypes.DWORD),
+        ("cntThreads", wintypes.DWORD),
+        ("th32ParentProcessID", wintypes.DWORD),
+        ("pcPriClassBase", ctypes.c_long),
+        ("dwFlags", wintypes.DWORD),
+        ("szExeFile", wintypes.WCHAR * 260),
+    ]
+
+
+def list_processes():
+    if _kernel32 is None:
+        return []
+    snapshot = _kernel32.CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0)
+    if snapshot == INVALID_HANDLE_VALUE:
+        return []
+    try:
+        entry = _ProcessEntry32W()
+        entry.dwSize = ctypes.sizeof(_ProcessEntry32W)
+        processes = []
+        if _kernel32.Process32FirstW(snapshot, ctypes.byref(entry)):
+            while True:
+                processes.append((int(entry.th32ProcessID), int(entry.th32ParentProcessID),
+                                  str(entry.szExeFile)))
+                if not _kernel32.Process32NextW(snapshot, ctypes.byref(entry)):
+                    break
+        return processes
+    except Exception:
+        return []
+    finally:
+        try:
+            _kernel32.CloseHandle(snapshot)
+        except Exception:
+            pass
+
+
+def sha256_file(path, chunk=1 << 20):
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        while True:
+            block = handle.read(chunk)
+            if not block:
+                break
+            digest.update(block)
+    return digest.hexdigest()
+
+
+def _file_version_info(path):
+    if _version is None:
+        return {}
+    try:
+        size = _version.GetFileVersionInfoSizeW(path, None)
+        if not size:
+            return {}
+        buffer = ctypes.create_string_buffer(size)
+        if not _version.GetFileVersionInfoW(path, 0, size, buffer):
+            return {}
+        pointer = ctypes.c_void_p()
+        length = wintypes.UINT()
+        if not _version.VerQueryValueW(buffer, "\\VarFileInfo\\Translation",
+                                       ctypes.byref(pointer), ctypes.byref(length)):
+            return {}
+        if length.value < 4:
+            return {}
+        lang, codepage = struct.unpack("<HH", ctypes.string_at(pointer, 4))
+        result = {}
+        fields = (
+            ("FileVersion", "fileVersion"),
+            ("ProductVersion", "productVersion"),
+            ("ProductName", "productName"),
+            ("CompanyName", "companyName"),
+            ("FileDescription", "fileDescription"),
+        )
+        for key, name in fields:
+            sub = f"\\StringFileInfo\\{lang:04x}{codepage:04x}\\{key}"
+            if _version.VerQueryValueW(buffer, sub, ctypes.byref(pointer), ctypes.byref(length)):
+                if length.value:
+                    result[name] = ctypes.wstring_at(pointer, length.value).rstrip("\x00")
+        return result
+    except Exception:
+        return {}
+
+
+def describe_target(path):
+    info = {"path": path}
+    try:
+        info["size"] = os.stat(path).st_size
+    except OSError:
+        pass
+    try:
+        with open(path, "rb") as handle:
+            header = handle.read(0x400)
+        if header[:2] == b"MZ":
+            offset = int.from_bytes(header[0x3C:0x40], "little")
+            machine = int.from_bytes(header[offset + 4:offset + 6], "little")
+            info["arch"] = {0x14C: "x86", 0x8664: "x64", 0xAA64: "arm64"}.get(
+                machine, f"0x{machine:04X}")
+    except (OSError, ValueError, IndexError):
+        pass
+    try:
+        info["sha256"] = sha256_file(path)
+    except OSError:
+        pass
+    info.update(_file_version_info(path))
+    return info
+
+
 class TimeShiftSession:
     def __init__(self, pid, session, script):
         self.pid = pid
         self.session = session
         self.script = script
+        self.exit_code = None
+        self.detach_reason = None
+        self.crash = None
+        self.children = {}
+        self.started_at = time.time()
+        self.ended_at = None
         self._detached = threading.Event()
+        self._stop_tracker = threading.Event()
+        self._exit_handle = open_exit_handle(pid)
         session.on("detached", self._handle_detached)
+        self._tracker = threading.Thread(target=self._track_children, daemon=True)
+        self._tracker.start()
 
-    def _handle_detached(self, *args):
+    def _handle_detached(self, reason=None, crash=None):
+        if reason is not None:
+            self.detach_reason = str(reason)
+        if crash is not None:
+            self.crash = str(crash)
+        self.ended_at = time.time()
+        self.exit_code = query_exit_code(self._exit_handle)
+        close_handle(self._exit_handle)
+        self._exit_handle = None
+        self._stop_tracker.set()
         self._detached.set()
+
+    def _track_children(self):
+        while not self._stop_tracker.wait(1.5):
+            processes = list_processes()
+            if not processes:
+                continue
+            parents = {pid: ppid for pid, ppid, _ in processes}
+            for pid, ppid, name in processes:
+                if pid == self.pid:
+                    continue
+                current = ppid
+                depth = 0
+                while current and depth < 4:
+                    if current == self.pid:
+                        self.children[pid] = name
+                        break
+                    current = parents.get(current, 0)
+                    depth += 1
+
+    @property
+    def duration_ms(self):
+        end = self.ended_at or time.time()
+        return int((end - self.started_at) * 1000)
 
     def wait(self):
         while not self._detached.wait(0.5):
@@ -194,7 +389,9 @@ def main(argv=None):
         session.wait()
     except KeyboardInterrupt:
         session.stop()
-    print("[timeshift] hedef kapandi.")
+    code = session.exit_code
+    code_text = "bilinmiyor" if code is None else f"0x{code & 0xFFFFFFFF:08X}"
+    print(f"[timeshift] hedef kapandi (cikis kodu: {code_text}, sure: {session.duration_ms} ms).")
     return 0
 
 

@@ -3,8 +3,8 @@
      xmlns:ui="http://wixtoolset.org/schemas/v4/wxs/ui">
   <Package Name="ASCOS TimeShift"
            Manufacturer="ASCOS"
-           Version="1.0.0"
-           ProductCode="{89B22754-4FBC-4356-983F-255A90ED0375}"
+           Version="1.1.0"
+           ProductCode="{6B7A6136-D7CD-4FBD-8D9A-36346F6AB3A7}"
            UpgradeCode="{86F6FF0B-2989-460B-A671-4429820AF470}"
            Scope="perUser"
            Language="1055"

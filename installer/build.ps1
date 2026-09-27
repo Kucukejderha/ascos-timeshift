@@ -12,6 +12,7 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller (CLI) basarisiz, kod: $LASTEXITCOD
 
 python -m PyInstaller --noconfirm --clean --log-level WARN --onefile --windowed --name TimeShiftGui `
   --icon "$projectDir\assets\ASCOS-TimeShift.ico" `
+  --hidden-import ascos_logging `
   --add-data "$projectDir\agent.js;." `
   --add-data "$projectDir\assets\ASCOS-TimeShift.ico;assets" `
   --add-data "$projectDir\assets\ASCOS-TimeShift-52.png;assets" `
@@ -24,7 +25,7 @@ if ($LASTEXITCODE -ne 0) { throw "PyInstaller (GUI) basarisiz, kod: $LASTEXITCOD
 Push-Location $PSScriptRoot
 try {
   & $wix build -arch x64 -ext WixToolset.UI.wixext -culture tr-TR `
-    -o "$projectDir\ASCOS-TimeShift-1.0.0.msi" "Product.wxs"
+    -o "$projectDir\ASCOS-TimeShift-1.1.0.msi" "Product.wxs"
   if ($LASTEXITCODE -ne 0) { throw "wix build basarisiz, kod: $LASTEXITCODE" }
 } finally {
   Pop-Location
